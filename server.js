@@ -3,7 +3,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const { Pool } = require('pg');
 const cors = require('cors');
-
+var qs = require('qs');
 const multer = require('multer');
 const bodyParser = require('body-parser');
 const { Twilio } = require('twilio');
@@ -33,11 +33,18 @@ const openai = new OpenAIApi({
     apiKey:'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'
 });
 
-const apiKey = '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';
+//testing
+const apiKey = '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';
+
+
+//prod
+// const apiKey = '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';
 
 const { v4: uuidv4 } = require('uuid');
 
-const url = 'https://www.mapcommunications.com/pricing';
+const urls = ['https://www.mapcommunications.com/pricing',
+              'https://www.mapcommunications.com/about-us/faq/',
+              'https://www.mapcommunications.com/services/'];
 
 let conversationState = {};
 let scrapedContent = " ";
@@ -73,17 +80,32 @@ app.post('/api/openai', async (req, res) => {
         
 
                     // Scrape the website content
-                    await axios.get(url)
-                    .then(response => {
-                        var html = response.data;
-                        html = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "");
-                        const $ = cheerio.load(html, { xmlMode: true });
-                        let textArray = [];
-                        $('body div').each((i, el) => {
-                            textArray.push($(el).text());
-                        });
-                        scrapedContent = textArray.join(' ');
+                    // await axios.get(url)
+                    // .then(response => {
+                    //     var html = response.data;
+                    //     html = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "");
+                    //     const $ = cheerio.load(html, { xmlMode: true });
+                    //     let textArray = [];
+                    //     $('body div').each((i, el) => {
+                    //         textArray.push($(el).text());
+                    //     });
+                    //     scrapedContent = textArray.join(' ');
                         //console.log("scrapedContent", scrapedContent);
+
+                        
+                    try {
+                        const responses = await Promise.all(urls.map(url => axios.get(url)));
+                        const htmlContents = responses.map(response => response.data);
+
+                        htmlContents.forEach(html => {
+                            html = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "");
+                            const $ = cheerio.load(html, { xmlMode: true });
+                            let textArray = [];
+                            $('body div').each((i, el) => {
+                                textArray.push($(el).text());
+                            });
+                            scrapedContent += textArray.join(' ') + ' ';
+                        });
                         
                         gptConversation = [];
                          // Context message
@@ -91,13 +113,18 @@ app.post('/api/openai', async (req, res) => {
                         role: 'system',
                         content: 'You are a world-class customer care representative for a company called Map Communications. ' + 'You can use the following information to answer any questions.' +
                        
-                            scrapedContent + '.You dont know anything that is not given in the above information. If not able to answer say I am not able to assist you at this point. If the user want to know about plans, prices, products give me answer with JSON format with addtional key {"category":"Leads"} else give me answer as {"category":"CS"}.'+ 'If you are unable to answer please ask the user if they want you to create a support ticket. Give me answer in JSON format with additonal key {"supportTicket":false} and include this in every response. If user agrees to create support ticket by saying yes or anything similar to it, please send me the answer in JSON format with addtional key supportTicket as true. If user does not want to create a support ticket, please send supportTicket as false. If the user wants to create a support ticket, please collect name, email and phone number.Please collect phone number with phoneNumber key and send me the answer in JSON format with additional keys as {"name":"Test","email":"test@example.com","phoneNumber":"+1757555444"}. It is mandatory for you to collect these three details to create a support ticket. Always respond with a JSON object with the keys responseContent,category,supportTicket,name,email,phoneNumber.'
+                            scrapedContent + '.You dont know anything that is not given in the above information. If not able to answer say I am not able to assist you at this point. If the user want to know about plans, prices, products give me answer with JSON format with addtional key {"category":"Leads"} else give me answer as {"category":"CS"}.'+ 'If you are unable to answer please ask the user if they want you to create a support ticket. Give me answer in JSON format with additonal key {"supportTicket":false} and include this in every response. If user agrees to create support ticket by saying yes or anything similar to it, please send me the answer in JSON format with addtional key supportTicket as true and generate a summary of the user message that is not able to answer and add the summary content with additional key summary. It is mandatory for you to generate a summary to create a support ticket If user does not want to create a support ticket, please send supportTicket as false. If the user wants to create a support ticket, please collect name, phone number and email.Please collect phone number with phoneNumber key and send me the answer in JSON format with additional keys as {"name":"Test","email":"test@example.com","phoneNumber":"+1757555444"}. It is mandatory for you to collect these three details to create a support ticket. Always respond with a JSON object with the keys responseContent,category,supportTicket,name,email,phoneNumber,summary.'+
+                            'At the end of the conversation, generate a summary of the conversation. The summary should briefly encapsulate the user questions and the responses provided and send the answer in JSON format with an additional key {summary: "Text"}.'
                     };
 
                     gptConversation.push(systemMessage);
                        
-                    })
-                    .catch(console.error);
+                    // })
+                    // .catch(console.error);
+                    } catch (error) {
+                        console.error('Error scraping content:', error);
+                        return res.status(500).json({ error: 'Error scraping content' });
+                    }
     }
 
     const state = conversationState[sessionId];
@@ -146,6 +173,7 @@ app.post('/api/openai', async (req, res) => {
                         }
                     });
 
+                    console.log('token usage:', response.usage);
                     prompt = response.data.choices[0].message.content;
                     console.log('Prompt after context:', prompt);
 
@@ -157,7 +185,11 @@ app.post('/api/openai', async (req, res) => {
                         return res.status(500).json({ error: 'Error processing OpenAI response' });
                     }
 
-                    const { supportTicket, category, responseContent,name,email,phoneNumber } = responseJson;
+                    const { supportTicket, category, responseContent,name,email,phoneNumber,summary: responseSummary } = responseJson;
+                    // const summary = responseJson.summary || null;
+                    
+
+
                     prompt = responseContent;
 
                     await pool.query(
@@ -174,8 +206,16 @@ app.post('/api/openai', async (req, res) => {
 
                     console.log('User response:', userResponse.content);
 
+
+
                     // Save the user response summary
-                    state.summary = userResponse.content;
+                    // state.summary = userResponse.content;
+                    // if (summary) {
+                    //     state.summary = summary;
+                    // } else {
+                    //     state.summary = userResponse.content;
+                    // }
+                    state.summary = responseSummary || 'No summary provided';
 
                     if (supportTicket && name && phoneNumber && email) {
                         console.log('Affirmative response detected. Creating support ticket...');
@@ -189,6 +229,14 @@ app.post('/api/openai', async (req, res) => {
 
                         
                         const ticketNumber = Math.floor(100000 + Math.random() * 900000).toString();
+
+                        // if (!summary) {
+                        //     summary = userResponse.content;
+                        // }
+
+                        let summary = responseSummary || userResponse.content || 'No summary provided';
+                        
+
                         const ticketQuery = `
                             INSERT INTO supporttickets (ticket_number, chatusers_id, summary, created_at, status) 
                             VALUES ($1, $2, $3, NOW(), 'Pending') RETURNING ticket_number
@@ -201,6 +249,9 @@ app.post('/api/openai', async (req, res) => {
                             'INSERT INTO chatmessages (conversationid, message, role) VALUES ($1, $2, $3)',
                             [state.conversationId, prompt, 'ai']
                         );
+
+
+                        CallTwilio(name,phoneNumber,ticketResult.rows[0].ticket_number);
                     }
                     break;
 
@@ -230,11 +281,55 @@ app.post('/api/openai', async (req, res) => {
 });
 
 
+function CallTwilio(name,phone,ticketNumber){
+    var message = "Hello "+name+" , your support ticket "+ticketNumber+" has been created successfully. Please track the ticket status using this link"
+    var data = qs.stringify({
+        'To': phone,
+        'From': '+18559972544',
+        'Parameters': '{ "order":"'+message+'"}' 
+      });
+      var config = {
+		method: 'post',
+		url: 'https://studio.twilio.com/v2/Flows/FW2944fceeb5e800edc2fa8c7fa0ff4f6f/Executions',
+		headers: { 
+		   
+		  'Content-Type': 'application/x-www-form-urlencoded'
+		},
+		auth: {
+			username: "AC7398a9e0c534c88f8ada504c2b1fb43f",
+			password: "af04f0a1c92e150ea7a33c3d364fa57b"
+		 },
+		data : data
+	  };
+      
+      axios(config)
+      .then(function (response) {
+        console.log(JSON.stringify(response.data));
+      })
+      .catch(function (error) {
+        console.log(error);
+      });
+}
+
+
 
 // Reset conversation state periodically to avoid indefinite state retention
 // setInterval(() => {
 //     conversationState = {};
 // }, 50000);
+
+app.put('/api/updateTicketStatus', async (req, res) => {
+    const { ticket_number, status } = req.body;
+    try {
+        const result = await pool.query(
+            'UPDATE supporttickets SET status = $1 WHERE ticket_number = $2',
+            [status, ticket_number]
+        );
+        res.status(200).json({ message: 'Ticket status updated successfully' });
+    } catch (error) {
+        res.status(500).json({ error: 'Error updating ticket status' });
+    }
+});
 
 app.get('/api/chatusersinfo', async (req, res) => {
     try {
